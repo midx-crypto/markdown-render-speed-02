@@ -599,6 +599,7 @@ class FastTokenizer extends Tokenizer {
         const rxAll = { v, Q, ee, te, M, ne };
         const rxM = { v: null, Q, ee, te, M, ne: null };
         let mm = m;
+        let prevZ = null;
         for (; e;) {
           const U = firstLine(e);
           let f2 = U, Z;
@@ -608,15 +609,35 @@ class FastTokenizer extends Tokenizer {
           }
           if (listLineBreak(f2, R, rxAll)) break;
           if (!this.options.pedantic) {
-            Z = f2.replace(this.rules.other.leadingSpaceTab, me => expandTabs(me));
+            // The leading-whitespace expansion only changes a line whose
+            // leading run of spaces and tabs holds a tab.
+            let Z0 = f2, k = 0;
+            for (; k < f2.length; k++) {
+              const c = f2.charCodeAt(k);
+              if (c === 32) continue;
+              if (c === 9) {
+                Z0 = f2.replace(this.rules.other.leadingSpaceTab,
+                  me => expandTabs(me));
+              }
+              break;
+            }
+            Z = Z0;
           }
           const fBlank = isBlankLine(f2);
-          let zi = 0;
-          while (zi < Z.length && Z.charCodeAt(zi) === 32) zi++;
-          const zIndent = zi === Z.length ? -1 : zi;
+          // A blank line takes the indented branch whatever its indent is,
+          // so its leading spaces need no scan.
+          let zIndent = -1;
+          if (!fBlank) {
+            let zi = 0;
+            while (zi < Z.length && Z.charCodeAt(zi) === 32) zi++;
+            zIndent = zi === Z.length ? -1 : zi;
+          }
           if (zIndent >= R || fBlank) {
             parts.push('\n' + Z.slice(R));
           } else {
+            // mm is the previous line's content after R spaces, needed
+            // only here; computing it lazily skips a slice per line.
+            if (prevZ !== null) mm = prevZ.slice(R);
             if (y || expandedIndent(mm) >= 4 ||
                 listLineBreak(mm, R, rxM)) break;
             const qe = !this.options.pedantic && isSetextLine(f2) &&
@@ -626,7 +647,7 @@ class FastTokenizer extends Tokenizer {
           }
           y = fBlank;
           e = e.substring(U.length + 1);
-          mm = Z.slice(R);
+          prevZ = Z;
         }
       }
       d = parts.join('');
@@ -870,6 +891,9 @@ class FastLexer extends Lexer {
     const src = e;
     const trig = computeTriggers(src);
     const ptr = { wi: 0, hi: 0, pi: 0, mi: 0, ei: 0 };
+    // Extensions are checked once, not on every token.
+    const inlineExt = this.options.extensions?.inline;
+    const startInlineExt = this.options.extensions?.startInline;
     let s = false; // whether the previous token was text
     let r = ''; // last char of the previous text token ("" when it ended in _)
     let o = Infinity;
@@ -879,7 +903,7 @@ class FastLexer extends Lexer {
       if (!s) r = '';
       s = false;
       let i;
-      if (this.options.extensions?.inline?.some(p =>
+      if (inlineExt?.some(p =>
         (i = p.call({ lexer: this }, e, tokens))
           ? (e = e.substring(i.raw.length), tokens.push(i), !0) : !1)) {
         continue;
@@ -934,7 +958,7 @@ class FastLexer extends Lexer {
         if (i) { e = e.substring(i.raw.length); tokens.push(i); continue; }
       }
       let l = e;
-      if (this.options.extensions?.startInline) {
+      if (startInlineExt) {
         let p = Infinity;
         const h = e.slice(1);
         let u;
