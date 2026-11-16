@@ -1,32 +1,19 @@
-[![make.fun · markdown-render-speed-02](https://make.fun/badge/markdown-render-speed-02.svg)](https://make.fun/bounty/markdown-render-speed-02?utm_source=github&utm_medium=readme&utm_campaign=markdown-render-speed-02)
-
-[![rank](https://make.fun/badge/markdown-render-speed-02/midx-crypto/markdown-render-speed-02/rank.svg)](https://make.fun/bounty/markdown-render-speed-02/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=markdown-render-speed-02)
-
-[![reward](https://make.fun/badge/markdown-render-speed-02/midx-crypto/markdown-render-speed-02/reward.svg)](https://make.fun/bounty/markdown-render-speed-02?utm_source=github&utm_medium=readme&utm_campaign=markdown-render-speed-02)
-
 # markdown-render-speed-02
 
-A faster drop-in for marked 18.1.3. `parse(markdown)` in `parse.js`
-returns exactly the HTML `marked.parse(markdown)` returns with
-marked's default options, but renders the practice set noticeably
-faster than marked itself.
+[![make.fun · markdown-render-speed-02](https://make.fun/badge/markdown-render-speed-02.svg)](https://make.fun/bounty/markdown-render-speed-02?utm_source=github&utm_medium=readme&utm_campaign=markdown-render-speed-02)
+[![rank](https://make.fun/badge/markdown-render-speed-02/midx-crypto/markdown-render-speed-02/rank.svg)](https://make.fun/bounty/markdown-render-speed-02/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=markdown-render-speed-02)
+[![reward](https://make.fun/badge/markdown-render-speed-02/midx-crypto/markdown-render-speed-02/reward.svg)](https://make.fun/bounty/markdown-render-speed-02?utm_source=github&utm_medium=readme&utm_campaign=markdown-render-speed-02)
 
-How it works: instead of reimplementing the parser, the entry
-subclasses marked's own `Tokenizer` and `Lexer` (vendored unchanged
-under `vendor/marked`) and speeds up the hot paths while keeping
-every decision identical:
+md-fast is a faster drop-in for marked 18.1.3: its `parse(markdown)` returns exactly the HTML that `marked.parse(markdown)` returns with marked's default options (GFM on), for less CPU. It subclasses marked's own Lexer and Tokenizer and replaces the hot paths with index-based scanning: a first-character dispatch inline loop, a hand-written text scanner, block pre-checks, and a cached closer index for emphasis and strikethrough. The vendored `marked.esm.js` under `vendor/marked/` is the reference library itself, byte for byte from npm, kept so the entry can subclass it.
 
-- the inline loop dispatches on the first character, so at each
-  position only the tokenizers that could match are tried;
-- plain text runs are scanned with a hand-written scanner that
-  stops at exactly the same places marked's text regex would;
-- the emphasis / strikethrough masking and the scan for the last
-  possible closer are computed lazily, once per inline source,
-  instead of eagerly for every inline token list;
-- block tokenizing skips the table and setext-heading patterns
-  unless the next lines can possibly hold one.
+## Run it
 
-`main.ts` is the harness driver: it reads `/input/cases.json`,
-renders each case on its own with `parse`, and writes
-`/output/html.json`. No input is recognised, nothing is cached
-between cases, and `parse` keeps no state from an earlier call.
+```sh
+node main.ts
+```
+
+`main.ts` reads every case from `/input/cases.json`, renders each one with `parse`, and writes the HTML strings to `/output/html.json`.
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=g5h40b4t&utm_source=github&utm_medium=readme&utm_campaign=markdown-render-speed-02) · AI agents build software for cash rewards</sub>

@@ -1,23 +1,18 @@
-// Harness driver: renders every case in /input/cases.json with parse()
-// from parse.js and writes the HTML strings, in order, to
-// /output/html.json. MAKEFUN_INPUT_DIR / MAKEFUN_OUTPUT_DIR stand in
-// for /input and /output when running outside a container.
+// md-fast driver: the program the harness runs.
+//
+// Reads every case from /input/cases.json, renders each one with parse
+// from parse.js, and writes the HTML strings, in order, to
+// /output/html.json. Node 22 standard library only; nothing is read from
+// anywhere else, and nothing is kept from one case to the next.
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { parse } from './parse.js';
 
-const inputDir = process.env.MAKEFUN_INPUT_DIR ?? '/input';
-const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
-
-const cases = JSON.parse(
-  readFileSync(join(inputDir, 'cases.json'), 'utf8'),
-) as Array<{ id: string; markdown: string }>;
-
-const html: string[] = new Array(cases.length);
-// Each case is rendered on its own: parse() keeps no state between calls.
+const cases = JSON.parse(readFileSync('/input/cases.json', 'utf8'));
+const html = new Array(cases.length);
 for (let i = 0; i < cases.length; i++) {
   html[i] = parse(cases[i].markdown);
 }
 
-writeFileSync(join(outputDir, 'html.json'), JSON.stringify(html));
+mkdirSync('/output', { recursive: true });
+writeFileSync('/output/html.json', JSON.stringify(html));
