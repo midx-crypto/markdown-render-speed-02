@@ -1062,7 +1062,7 @@ class FastLexer extends Lexer {
         const i = t.at(-1);
         if (i?.type === 'paragraph' || i?.type === 'text') {
           i.raw += (i.raw.endsWith('\n') ? '' : '\n') + r.raw;
-          i.text += '\n' + r.raw;
+          i.text += '\n' + r.text;
           this.inlineQueue.at(-1).src = i.text;
         } else {
           if (!this.tokens.links[r.tag]) {
