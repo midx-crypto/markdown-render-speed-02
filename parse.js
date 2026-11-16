@@ -183,6 +183,42 @@ function isSpaceTabBlank(s) {
   return true;
 }
 
+// The number of code points in `s` (what [...s].length counts), without
+// building the array.
+function codePointLength(s) {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xDC00 && c <= 0xDFFF) continue;
+    n++;
+  }
+  return n;
+}
+
+// The last possible emphasis/strikethrough closer indices in a masked
+// source, as marked's private fe() computes them: for "*" and "_" the
+// index of the last delimiter run whose preceding character is not a
+// space, and for "~" the same. (The run scan skips the whole run once
+// its first character is seen, so the recorded index is the run start.)
+function closerIndices(a) {
+  const e = { '*': -1, _: -1 };
+  let t = -1;
+  const n = a.length;
+  for (let s = 0; s < n; s++) {
+    const r = a[s];
+    if (r !== '*' && r !== '_' && r !== '~') continue;
+    const o = s === 0 ? '\n' : a[s - 1];
+    let i = s + 1;
+    for (; i < n && a[i] === r;) i++;
+    if (o !== ' ' && o !== '\t' && o !== '\n' && o !== '\r' && o !== '\f') {
+      if (r === '~') t = s;
+      else e[r] = s;
+    }
+    s = i - 1;
+  }
+  return { em: e, del: t };
+}
+
 // ---------------------------------------------------------------------------
 // The inline text token, found by search instead of by the GFM text regex.
 //
@@ -300,6 +336,129 @@ function textTokenLength(s) {
     a = s.indexOf('@', a + 1);
   }
   return stop;
+}
+
+// ---------------------------------------------------------------------------
+// Trigger positions for the text token, computed once per inline pass.
+// textTokenLength repeats its four searches (www., hard break, ":", "@")
+// on every text token; the searches only depend on the whole source, so
+// they are done once here and each text token just walks pointers that
+// only move forward. Each array holds absolute positions, in order:
+//   proto: starts of http://, https:// or ftp://
+//   www:   positions of "www." whose preceding char is a space, *, _, ~ or (
+//   hb:    starts of runs of two or more spaces ending in a newline
+//   mail:  starts of "mailto:"/"xmpp:" preceded by a non-alphanumeric char
+//   email: starts of the email-character run before an "@" (with a
+//          non-empty run); at holds the "@" position, in parallel
+// ---------------------------------------------------------------------------
+
+function computeTriggers(src) {
+  const proto = [], www = [], hb = [], mail = [], email = [], at = [];
+  let wi = src.indexOf('w', 0);
+  while (wi >= 0) {
+    if (src.startsWith('www.', wi)) {
+      const prev = src.charCodeAt(wi - 1);
+      if (isSpace(prev) || prev === 42 || prev === 95 || prev === 126 ||
+          prev === 40) www.push(wi);
+    }
+    wi = src.indexOf('w', wi + 1);
+  }
+  let hm = src.indexOf('  \n', 0);
+  while (hm >= 0) {
+    let h = hm;
+    while (h > 0 && src.charCodeAt(h - 1) === 32) h--;
+    if (hb.length === 0 || hb[hb.length - 1] !== h) hb.push(h);
+    hm = src.indexOf('  \n', hm + 1);
+  }
+  let ci = src.indexOf(':', 0);
+  while (ci >= 0) {
+    if (src.charCodeAt(ci + 1) === 47 && src.charCodeAt(ci + 2) === 47) {
+      const c1 = src.charCodeAt(ci - 1) | 32, c2 = src.charCodeAt(ci - 2) | 32,
+        c3 = src.charCodeAt(ci - 3) | 32, c4 = src.charCodeAt(ci - 4) | 32,
+        c5 = src.charCodeAt(ci - 5) | 32;
+      if (c5 === 104 && c4 === 116 && c3 === 116 && c2 === 112 && c1 === 115) {
+        proto.push(ci - 5);
+      } else if (c4 === 104 && c3 === 116 && c2 === 116 && c1 === 112) {
+        proto.push(ci - 4);
+      } else if (c3 === 102 && c2 === 116 && c1 === 112) {
+        proto.push(ci - 3);
+      }
+    }
+    if (ci - 6 >= 0 && src.startsWith('mailto', ci - 6)) {
+      const mm = ci - 6;
+      if (!isAlnum(src.charCodeAt(mm - 1))) mail.push(mm);
+    } else if (ci - 4 >= 0 && src.startsWith('xmpp', ci - 4)) {
+      const mm = ci - 4;
+      if (!isAlnum(src.charCodeAt(mm - 1))) mail.push(mm);
+    }
+    ci = src.indexOf(':', ci + 1);
+  }
+  let a = src.indexOf('@', 0);
+  while (a >= 0) {
+    let rs = a - 1;
+    while (rs >= 0 && isEmailChar(src.charCodeAt(rs))) rs--;
+    rs++;
+    if (rs < a) { email.push(rs); at.push(a); }
+    a = src.indexOf('@', a + 1);
+  }
+  return { proto, www, hb, mail, email, at };
+}
+
+// The length of the text token starting at absolute offset `off` in `src`,
+// using the precomputed triggers (same result as textTokenLength on the
+// remaining string). `ptr` holds the per-array pointer, advanced in place.
+function textLenAt(src, off, trig, ptr) {
+  const n = src.length;
+  const c0 = src.charCodeAt(off);
+  if (!isAlnum(c0) && (src.startsWith('mailto:', off + 1) ||
+      src.startsWith('xmpp:', off + 1))) {
+    return 1;
+  }
+  let p;
+  if (c0 === 96) {
+    p = off + 1;
+    while (p < n && src.charCodeAt(p) === 96) p++;
+  } else if (c0 === 126) {
+    p = off + 1;
+    while (p < n && src.charCodeAt(p) === 126) p++;
+  } else {
+    p = off + 1;
+  }
+  if (p >= n) return n - off;
+  STOP_RE.lastIndex = p;
+  let stop = n;
+  const m = STOP_RE.exec(src);
+  if (m) stop = m.index;
+  const w = trig.www;
+  while (ptr.wi < w.length && w[ptr.wi] < p) ptr.wi++;
+  if (ptr.wi < w.length && w[ptr.wi] < stop) stop = w[ptr.wi];
+  // A hard break: a run of two or more spaces and a newline starting at
+  // p stops the text at p; otherwise the next run start at or after p.
+  let q = p;
+  while (q < n && src.charCodeAt(q) === 32) q++;
+  if (q - p >= 2 && src.charCodeAt(q) === 10) {
+    stop = p;
+  } else {
+    const h = trig.hb;
+    while (ptr.hi < h.length && h[ptr.hi] < p) ptr.hi++;
+    if (ptr.hi < h.length && h[ptr.hi] < stop) stop = h[ptr.hi];
+  }
+  const pr = trig.proto;
+  while (ptr.pi < pr.length && pr[ptr.pi] < p) ptr.pi++;
+  if (ptr.pi < pr.length && pr[ptr.pi] < stop) stop = pr[ptr.pi];
+  const ml = trig.mail;
+  while (ptr.mi < ml.length && ml[ptr.mi] <= p) ptr.mi++;
+  if (ptr.mi < ml.length && ml[ptr.mi] < stop) stop = ml[ptr.mi];
+  // An email run: "@" positions at or before p cannot match (the walk
+  // back would be empty); the run's start is the stop, or p when the run
+  // starts before p.
+  const em = trig.email, at = trig.at;
+  while (ptr.ei < at.length && at[ptr.ei] <= p) ptr.ei++;
+  if (ptr.ei < em.length) {
+    const rs = em[ptr.ei] < p ? p : em[ptr.ei];
+    if (rs < stop) stop = rs;
+  }
+  return stop - off;
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +580,9 @@ class FastTokenizer extends Tokenizer {
         d = m.slice(R);
         R += b;
       }
+      // The item text is built from pieces and joined once, so a long
+      // item does not copy its text once per line.
+      const parts = [d];
       if (y && isSpaceTabBlank(f)) {
         e = e.substring(f.length + 1);
         u = true;
@@ -453,20 +615,21 @@ class FastTokenizer extends Tokenizer {
           while (zi < Z.length && Z.charCodeAt(zi) === 32) zi++;
           const zIndent = zi === Z.length ? -1 : zi;
           if (zIndent >= R || fBlank) {
-            d += '\n' + Z.slice(R);
+            parts.push('\n' + Z.slice(R));
           } else {
             if (y || expandedIndent(mm) >= 4 ||
                 listLineBreak(mm, R, rxM)) break;
             const qe = !this.options.pedantic && isSetextLine(f2) &&
               this.rules.block.lheading.test(`${mm}\n${f2}`)
               ? `    ${Z.replace(/^ {0,3}/, '')}` : f2;
-            d += '\n' + qe;
+            parts.push('\n' + qe);
           }
           y = fBlank;
           e = e.substring(U.length + 1);
           mm = Z.slice(R);
         }
       }
+      d = parts.join('');
       const A = n.slice(k, s());
       if (!i.loose) {
         if (p) i.loose = true;
@@ -537,6 +700,98 @@ class FastTokenizer extends Tokenizer {
     }
     return i;
   }
+
+  // The last possible emphasis/strikethrough closer indices in a masked
+  // source, as marked's private fe() computes them. Marked recomputes
+  // them on every emStrong/del call (its cache is only filled by its own
+  // private wrapper, which this lexer bypasses); here they are computed
+  // once per inline pass and reused.
+  _closerFor(t) {
+    if (this._closerMasked !== t) {
+      this._closerMasked = t;
+      this._closer = closerIndices(t);
+    }
+    return this._closer;
+  }
+
+  // Marked's emStrong, with the per-call allocations removed: the
+  // character before the delimiter is read without spreading a slice,
+  // the delimiter length is counted without spreading, the alnum test
+  // does not allocate a match array, and the closer index comes from
+  // the per-pass cache instead of a fresh scan. The logic is unchanged.
+  emStrong(e, t, n = '') {
+    let s = this.rules.inline.emStrongLDelim.exec(e);
+    if (!s || !s[1] && !s[2] && !s[3] && !s[4]) return;
+    let r = s[0][0], o = n === r, i = t.length - e.length, l = i;
+    for (; !this.options.pedantic && l > 0 && t[l - 1] === r;) l--;
+    let p = '';
+    if (l > 0) {
+      const c1 = t.charCodeAt(l - 1);
+      if (c1 >= 0xDC00 && c1 <= 0xDFFF && l >= 2) {
+        const c0 = t.charCodeAt(l - 2);
+        p = (c0 >= 0xD800 && c0 <= 0xDBFF) ? t[l - 2] + t[l - 1] : t[l - 1];
+      } else p = t[l - 1];
+    }
+    let h = p === '*' || p === '_' || !!this.rules.inline.punctuation.exec(p);
+    l < i && (n = p);
+    let u = l < i ? h : !!this.rules.inline.punctuation.exec(n);
+    if (s[4] && this.rules.other.unicodeAlphaNumeric.test(n)) return;
+    let d = s[1] || s[3] || '';
+    if (!d || !n || u) {
+      let k = codePointLength(s[0]) - 1, g, b, m = k, f = 0, y = i - l + k,
+        R = !this.options.pedantic && p !== '' && !isSpace(p.charCodeAt(0)) &&
+          (!!d || r === '*' && !h);
+      if (r !== '*' && r !== '_') return;
+      let A = r === '*' ? this.rules.inline.emStrongRDelimAst
+        : this.rules.inline.emStrongRDelimUnd,
+        v = this._closerFor(t).em[r], Q = t.length - e.length + k;
+      if (v < Q) return;
+      t = t.slice(-1 * e.length + k);
+      let ee = v - Q;
+      for (A.lastIndex = 0; (s = A.exec(t)) !== null && !(s.index > ee);) {
+        if (g = s[1] || s[2] || s[3] || s[4] || s[5] || s[6], !g) continue;
+        if (b = [...g].length, s[3] || s[4]) { m += b; continue; }
+        else if (s[5] || s[6] || R) {
+          if (o && (s[5] || s[6])) break;
+          if (y % 3 && !((y + b) % 3)) { f += b; continue; }
+        }
+        if (m -= b, m > 0) continue;
+        b = Math.min(b, b + m + f);
+        let te = [...s[0]][0].length, M = e.slice(0, k + s.index + te + b);
+        if (Math.min(k, b) % 2) {
+          let U = M.slice(1, -1);
+          return { type: 'em', raw: M, text: U, tokens: this.lexer.inlineTokens(U) };
+        }
+        let ne = M.slice(2, -2);
+        return { type: 'strong', raw: M, text: ne, tokens: this.lexer.inlineTokens(ne) };
+      }
+    }
+  }
+
+  // Marked's del, same treatment: cached closer index, delimiter length
+  // counted without spreading.
+  del(e, t, n = '') {
+    let s = this.rules.inline.delLDelim.exec(e);
+    if (!s) return;
+    if (!(s[1] || '') || !n || this.rules.inline.punctuation.exec(n)) {
+      let o = codePointLength(s[0]) - 1, i, l, p = o,
+        h = this.rules.inline.delRDelim,
+        u = this._closerFor(t).del, d = t.length - e.length + o;
+      if (u < d) return;
+      t = t.slice(-1 * e.length + o);
+      let k = u - d;
+      for (h.lastIndex = 0; (s = h.exec(t)) !== null && !(s.index > k);) {
+        if (i = s[1] || s[2] || s[3] || s[4] || s[5] || s[6],
+          !i || (l = codePointLength(i), l !== o)) continue;
+        if (s[3] || s[4]) { p += l; continue; }
+        if (p -= l, p > 0) continue;
+        l = Math.min(l, l + p);
+        let g = [...s[0]][0].length, b = e.slice(0, o + s.index + g + l),
+          m = b.slice(o, -o);
+        return { type: 'del', raw: b, text: m, tokens: this.lexer.inlineTokens(m) };
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -578,8 +833,11 @@ class FastLexer extends Lexer {
           : n,
       );
     }
-    // The block-skip mask can only match a link, a code span or an HTML tag.
-    if (t.includes('[') || t.includes('`') || t.includes('<')) {
+    // The block-skip mask can only match a link (needs "]("), a code span
+    // (needs two backticks) or an HTML tag (needs "<" and ">").
+    const bi = t.indexOf('`');
+    if (t.includes('](') || (bi >= 0 && t.indexOf('`', bi + 1) >= 0) ||
+        (t.includes('<') && t.includes('>'))) {
       t = t.replace(this.tokenizer.rules.inline.blockSkip, (n, s, r) => {
         const o = r ? r.length : 0;
         return n.slice(0, o) + '[' + 'a'.repeat(n.length - o - 2) + ']';
@@ -601,10 +859,17 @@ class FastLexer extends Lexer {
   }
 
   _inlineLoop(e, tokens) {
+    // The closer cache is scratch for this pass only.
+    this.tokenizer._closerMasked = null;
+    this.tokenizer._closer = null;
     // Emphasis and strikethrough can only match when the source holds one
     // of *, _ or ~; without them the mask is the source itself.
     const masked = (e.includes('*') || e.includes('_') || e.includes('~'))
       ? this._mask(e) : e;
+    // The text-token triggers, computed once for the whole source.
+    const src = e;
+    const trig = computeTriggers(src);
+    const ptr = { wi: 0, hi: 0, pi: 0, mi: 0, ei: 0 };
     let s = false; // whether the previous token was text
     let r = ''; // last char of the previous text token ("" when it ended in _)
     let o = Infinity;
@@ -678,8 +943,20 @@ class FastLexer extends Lexer {
           if (typeof u === 'number' && u >= 0) p = Math.min(p, u);
         });
         if (p < Infinity && p >= 0) l = e.substring(0, p + 1);
+        i = this.tokenizer.inlineText(l);
+      } else {
+        // The text token, from the precomputed triggers: the same token
+        // inlineText would build, without re-searching the source.
+        const off = src.length - e.length;
+        const len = textLenAt(src, off, trig, ptr);
+        const raw = src.slice(off, off + len);
+        const inRaw = this.state.inRawBlock;
+        i = {
+          type: 'text', raw,
+          text: inRaw ? raw : decodeEntities(raw, this.tokenizer.rules.other),
+          escaped: inRaw,
+        };
       }
-      i = this.tokenizer.inlineText(l);
       if (i) {
         e = e.substring(i.raw.length);
         if (i.raw.slice(-1) !== '_') r = i.raw.slice(-1);
