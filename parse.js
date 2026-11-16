@@ -633,7 +633,7 @@ class FastTokenizer extends Tokenizer {
             zIndent = zi === Z.length ? -1 : zi;
           }
           if (zIndent >= R || fBlank) {
-            parts.push('\n' + Z.slice(R));
+            parts.push('\n', Z.slice(R));
           } else {
             // mm is the previous line's content after R spaces, needed
             // only here; computing it lazily skips a slice per line.
@@ -643,7 +643,7 @@ class FastTokenizer extends Tokenizer {
             const qe = !this.options.pedantic && isSetextLine(f2) &&
               this.rules.block.lheading.test(`${mm}\n${f2}`)
               ? `    ${Z.replace(/^ {0,3}/, '')}` : f2;
-            parts.push('\n' + qe);
+            parts.push('\n', qe);
           }
           y = fBlank;
           e = e.substring(U.length + 1);
