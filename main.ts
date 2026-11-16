@@ -15,6 +15,7 @@ const cases = JSON.parse(
 ) as Array<{ id: string; markdown: string }>;
 
 const html: string[] = new Array(cases.length);
+// Each case is rendered on its own: parse() keeps no state between calls.
 for (let i = 0; i < cases.length; i++) {
   html[i] = parse(cases[i].markdown);
 }
